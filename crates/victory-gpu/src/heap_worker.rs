@@ -1,5 +1,5 @@
 //! The pass that uploads textures picked by index, on a thread of its own
-//! (`VICTORY_HEAP_WORKER=1`; off by default; needs `VICTORY_LATE_WAIT`).
+//! (`VICTORY_HEAP_WORKER=0` turns it off; needs `VICTORY_LATE_WAIT`).
 //!
 //! [`crate::draw::State::heap_textures`] runs on whichever thread of the
 //! title records the frame's first shader that picks textures by index: it
@@ -26,9 +26,6 @@
 //! - the uploads before the title's decoration bake, which must be there
 //!   for that draw, still run on the recording thread; the worker makes way
 //!   for them ([`urgent`]).
-// shortcut: what a submission shows for a texture is up to a frame later
-// than when the recording thread did it all; with a backlog it is earlier,
-// since the pass has the whole frame instead of a slice of it.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
@@ -37,10 +34,11 @@ use crate::descriptor::Heap;
 use crate::host::HostList;
 use crate::object::This;
 
-/// Whether the pass runs on its own thread now.
+/// Whether the pass runs on its own thread now (on by default when late
+/// submission is active; `VICTORY_HEAP_WORKER=0` disables it).
 pub(crate) fn on() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("VICTORY_HEAP_WORKER").is_some_and(|v| v == "1")) && crate::host::late()
+    *ON.get_or_init(|| std::env::var_os("VICTORY_HEAP_WORKER").is_none_or(|v| v != "0")) && crate::host::late()
 }
 
 /// For the frame line, since the last one: nanoseconds the worker was at
@@ -177,7 +175,6 @@ impl Drop for Batch {
 /// runs them ahead of its own lists; their host slots are given their views.
 /// Called by the thread that submits.
 pub(crate) fn take_ready() -> Vec<HostList> {
-    // (Asked without the lock by every submission of a run without it.)
     if JOB.get().is_none() {
         return Vec::new();
     }
@@ -276,7 +273,7 @@ fn worker() {
             let heap = heap.heap();
             if let Some(host) = heap.host() {
                 let mut batch = Batch::new(heap);
-                crate::draw::State::heap_textures(crate::draw::Into::Ahead(&mut batch), heap, host);
+                crate::draw::State::heap_textures_ahead(&mut batch, heap, host);
             }
         }
         STATS[0].fetch_add(started.elapsed().as_nanos() as u64, Relaxed);

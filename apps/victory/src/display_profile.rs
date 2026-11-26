@@ -8,7 +8,7 @@ const SDR_MODE: u32 = 0x0615_c100;
 pub fn parse_resolution(s: &str) -> Option<(u32, u32)> {
     let lower = s.trim().to_ascii_lowercase();
     match lower.as_str() {
-        "480p" => Some((854, 480)),
+        "480p" => Some((848, 480)),
         "720p" => Some((1280, 720)),
         "1080p" => Some((1920, 1080)),
         "1440p" => Some((2560, 1440)),
