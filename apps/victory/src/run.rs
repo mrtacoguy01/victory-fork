@@ -5,12 +5,17 @@ use anyhow::{Context, Result};
 use crate::{Console, Unimplemented};
 
 #[cfg(windows)]
+#[path = "display_profile.rs"]
+mod display_profile;
+
+#[cfg(windows)]
 pub fn run(
     exe: &Path,
     unimplemented: Unimplemented,
     strict: bool,
     execute: bool,
     console: Console,
+    resolution: Option<String>,
 ) -> Result<()> {
     use std::sync::Arc;
     use victory_hle::{HleResolver, HostPolicy};
@@ -20,7 +25,7 @@ pub fn run(
     victory_hle::modules::lifecycle::wait_for_previous();
     let cfg = victory_core::Config::load()?;
     let original = std::fs::read(exe).with_context(|| format!("reading {}", exe.display()))?;
-    let prepared = victory_loader::prepare(&original)?;
+    let mut prepared = victory_loader::prepare(&original)?;
     let hash = prepared.original_hash.to_hex();
     match victory_game::identify(&hash) {
         Some(build) => println!("build          {} ({hash})", build.label),
@@ -29,7 +34,34 @@ pub fn run(
 
     let images = cfg.cache_subdir("images")?;
     victory_hle::modules::d3d12x::use_shader_cache(cfg.cache_subdir("shaders")?);
-    let image = victory_loader::load(&prepared, &images)?;
+    let res_str = resolution
+        .or_else(|| std::env::var("VICTORY_RENDER_RESOLUTION").ok())
+        .or_else(|| std::env::var("VICTORY_DISPLAY_MODE").ok());
+    let target_res = res_str.as_deref().and_then(display_profile::parse_resolution);
+    let render_scale = std::env::var("VICTORY_RENDER_SCALE")
+        .ok()
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(1.0f32);
+
+    let image = if let Some((width, height)) = target_res {
+        if (width, height) != (3840, 2160) || (render_scale - (2.0 / 3.0)).abs() > 0.001 {
+            anyhow::ensure!(
+                matches!(console, Console::SeriesX),
+                "Custom display resolution requires Series X mode"
+            );
+            display_profile::prepare(&mut prepared, width, height, render_scale)?;
+            // SAFETY: Setting environment variable before DXGI queries and title display initialization.
+            unsafe {
+                std::env::set_var("VICTORY_DISPLAY_MODE", format!("{width}x{height}"));
+            }
+            let res_dir = cfg.cache_subdir(&format!("images/res-{}x{}", width, height))?;
+            victory_loader::load(&prepared, &res_dir)?
+        } else {
+            victory_loader::load(&prepared, &images)?
+        }
+    } else {
+        victory_loader::load(&prepared, &images)?
+    };
     // The program is mapped from the copy `load` wrote: the file's bytes
     // and their patched copy are not read again, and were held for the
     // whole run (two blocks of 114.7 MB each for the title, in
@@ -339,6 +371,6 @@ mod tests {
 }
 
 #[cfg(not(windows))]
-pub fn run(_: &Path, _: Unimplemented, _: bool, _: bool, _: Console) -> Result<()> {
+pub fn run(_: &Path, _: Unimplemented, _: bool, _: bool, _: Console, _: Option<String>) -> Result<()> {
     anyhow::bail!("running titles requires Windows")
 }

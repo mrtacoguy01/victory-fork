@@ -107,6 +107,9 @@ enum Command {
         /// The console model the title sees (device type, memory).
         #[arg(long, value_enum, default_value_t = Console::SeriesX)]
         console: Console,
+        /// Target display resolution (e.g. 480p, 720p, 1080p, 1440p, 854x480, 1280x720).
+        #[arg(long)]
+        resolution: Option<String>,
         /// Arguments for the title, after `--` (it reads the whole command
         /// line; a title that relaunches itself passes some).
         #[arg(last = true)]
@@ -180,8 +183,9 @@ fn main() -> Result<()> {
             strict,
             execute,
             console,
+            resolution,
             title_args: _,
-        } => run::run(&exe, unimplemented, strict, execute, console),
+        } => run::run(&exe, unimplemented, strict, execute, console, resolution),
         Command::Config => show_config(),
     }
 }

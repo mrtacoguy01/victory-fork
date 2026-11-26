@@ -61,11 +61,10 @@ pub(crate) struct Shader {
     /// The first 8 bytes of its BLAKE3, as logged.
     pub(crate) hash: String,
     container: Vec<u8>,
-    /// It is left out: it animates or draws hair strands ([`hair_strands`]),
-    /// or serves rays that do not run ([`idle_without_rays`]).
+    /// It is left out: it serves rays that do not run ([`idle_without_rays`]).
     #[cfg(windows)]
     #[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
-    hair: bool,
+    skip: bool,
     /// Its result gets the least indirect light ([`crate::ambient`]).
     #[cfg(windows)]
     pub(crate) resolves_light: bool,
@@ -94,47 +93,6 @@ fn rays() -> bool {
 fn idle_without_rays(container: &[u8]) -> bool {
     const NAME: &[u8] = b"CS_ScreenProbes_ActivateRays";
     !rays() && container.windows(NAME.len()).any(|w| w == NAME)
-}
-
-#[cfg(windows)]
-fn hair_strands(container: &[u8]) -> bool {
-    static RUN: OnceLock<bool> = OnceLock::new();
-    const NAMES: [&[u8]; 18] = [
-        b"InterpolateStrand",
-        b"HairStrand",
-        b"CS_VisHair",
-        b"PS_Smh",
-        b"CS_InitSimBuffer",
-        b"CS_PreSkinSim",
-        b"CS_SolvePer",
-        b"CS_WavePerSpline",
-        b"CS_EstimateStartPosition",
-        b"CS_CachePrev",
-        b"CS_RestoreSimVelocity",
-        b"CS_UpdatePosePosition",
-        b"CS_GenerateAccessories",
-        b"CSGenerateHair",
-        b"CS_CalculateFireVolumes",
-        b"CS_ProjDecalCut",
-        b"CS_CullMaskPass",
-        b"CS_LodBlend",
-    ];
-    if *RUN.get_or_init(|| std::env::var_os("VICTORY_HAIR").is_some()) {
-        return false;
-    }
-    const END: &[u8] = b"_Wrapped";
-    container
-        .windows(END.len())
-        .enumerate()
-        .filter(|(_, w)| *w == END)
-        .any(|(at, _)| {
-            let before = &container[at.saturating_sub(100)..at];
-            let name = before
-                .rsplit(|b| !b.is_ascii_alphanumeric() && *b != b'_')
-                .next()
-                .unwrap_or_default();
-            NAMES.iter().any(|n| name.windows(n.len()).any(|w| w == *n))
-        })
 }
 
 impl std::fmt::Debug for Shader {
@@ -184,7 +142,7 @@ fn shader(stage: &'static str, bytes: &[u8]) -> Arc<Shader> {
                 hash: full.to_hex()[..16].to_owned(),
                 container: bytes.to_vec(),
                 #[cfg(windows)]
-                hair: hair_strands(bytes) || idle_without_rays(bytes),
+                skip: idle_without_rays(bytes),
                 #[cfg(windows)]
                 resolves_light: bytes
                     .windows(crate::ambient::PROGRAM.len())
@@ -622,7 +580,7 @@ fn skipped_shader(p: &Pipeline) -> Option<&str> {
     });
     p.shaders
         .iter()
-        .find(|shader| shader.hair || (!hashes.is_empty() && hashes.contains(&shader.hash)))
+        .find(|shader| shader.skip || (!hashes.is_empty() && hashes.contains(&shader.hash)))
         .map(|shader| shader.hash.as_str())
 }
 
