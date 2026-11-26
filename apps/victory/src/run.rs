@@ -9,6 +9,15 @@ use crate::{Console, Unimplemented};
 mod display_profile;
 
 #[cfg(windows)]
+struct PipelineCacheGuard;
+#[cfg(windows)]
+impl Drop for PipelineCacheGuard {
+    fn drop(&mut self) {
+        victory_hle::modules::d3d12x::save_pipeline_cache();
+    }
+}
+
+#[cfg(windows)]
 pub fn run(
     exe: &Path,
     unimplemented: Unimplemented,
@@ -23,6 +32,7 @@ pub fn run(
 
     // A title that relaunched itself: the old process must be gone first.
     victory_hle::modules::lifecycle::wait_for_previous();
+    let _cache_guard = PipelineCacheGuard;
     let cfg = victory_core::Config::load()?;
     let original = std::fs::read(exe).with_context(|| format!("reading {}", exe.display()))?;
     let mut prepared = victory_loader::prepare(&original)?;

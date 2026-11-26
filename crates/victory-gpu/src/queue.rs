@@ -136,7 +136,7 @@ fn present_behind() -> bool {
 /// the queue `this` holds. False if it has to run the old way.
 #[cfg(windows)]
 fn send_behind(this: This, planes: u32, plane_parameters: *const Plane) -> bool {
-    if this.is_null() || planes == 0 || PRESENTS_HELD.load(Ordering::Relaxed) != 0 {
+    if this.is_null() || planes != 1 || PRESENTS_HELD.load(Ordering::Relaxed) != 0 {
         return false;
     }
     let frame = FRAMES.load(Ordering::Relaxed) + 1;
@@ -487,7 +487,7 @@ pub(crate) fn release_held(all: bool) {
 pub(crate) fn behind() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        let on = std::env::var_os("VICTORY_ASYNC_SUBMIT").is_some_and(|v| v == "1") && crate::host::late() && cuts();
+        let on = std::env::var_os("VICTORY_ASYNC_SUBMIT").is_none_or(|v| v != "0") && crate::host::late() && cuts();
         if on {
             tracing::info!("submissions are prepared and sent by a thread of ours, not by the thread that submits (VICTORY_ASYNC_SUBMIT=1)");
             let _ = std::thread::Builder::new().name("victory-submit".into()).spawn(worker);
@@ -1121,6 +1121,42 @@ pub(crate) struct Plane {
     count: u32,
     resources: *const This,
 }
+/// Retail PresentX adds source-rectangle and destination pointers, a color
+/// space and seven option words after the common prefix. Older callers pass
+/// only the prefix for single-plane presents.
+#[cfg(windows)]
+#[repr(C)]
+struct RetailPlane {
+    prefix: Plane,
+    source_rects: *const (),
+    destination: *const (),
+    color_space: u32,
+    options: [u32; 7],
+}
+#[cfg(windows)]
+const _: () = assert!(size_of::<RetailPlane>() == 72);
+
+#[cfg(windows)]
+fn overlay_resource(parameters: *const Plane) -> Option<This> {
+    // Read only the second prefix at the 72-byte retail PresentX stride. A
+    // caller using a different layout can still present its base plane safely.
+    let second = parameters.cast::<RetailPlane>().wrapping_add(1).cast::<u8>();
+    let mut prefix = [0; size_of::<Plane>()];
+    if !crate::host::read_into(second, &mut prefix) {
+        return None;
+    }
+    // SAFETY: the prefix has the C layout above and its bytes were copied.
+    let plane = unsafe { prefix.as_ptr().cast::<Plane>().read_unaligned() };
+    let mut pointer = [0; size_of::<This>()];
+    if plane.count == 0
+        || plane.resources.is_null()
+        || !crate::host::read_into(plane.resources.cast(), &mut pointer)
+    {
+        return None;
+    }
+    let resource = usize::from_ne_bytes(pointer) as This;
+    crate::resource::is_resource(resource).then_some(resource)
+}
 /// Submission tagged with the frame it belongs to `(count, lists, frame
 /// token, flags)`; frames are paced elsewhere, so it runs as a plain one.
 extern "system" fn execute_x(this: This, count: u32, lists: *const This, _token: u64, _flags: u32) {
@@ -1404,8 +1440,27 @@ fn present_now(this: This, planes: u32, plane_parameters: *const Plane) -> HRESU
         const COPY_SOURCE: u32 = 0x800;
         let state = crate::resource::host_transition(resource, COPY_SOURCE)
             .map_or(COPY_SOURCE, |(_, before)| before);
-        let shown = host.present(texture, state, frame);
+        let overlay = (planes > 1)
+            .then(|| overlay_resource(plane_parameters))
+            .flatten()
+            .filter(|&over_res| over_res != resource)
+            .and_then(|over_res| {
+                crate::resource::host_resource(over_res).map(|over_tex| {
+                    let over_state = crate::resource::host_transition(over_res, COPY_SOURCE)
+                        .map_or(COPY_SOURCE, |(_, before)| before);
+                    (over_res, over_tex, over_state)
+                })
+            });
+        let shown = host.present_planes(
+            texture,
+            state,
+            overlay.as_ref().map(|(_, tex, st)| (*tex, *st)),
+            frame,
+        );
         crate::resource::host_transition(resource, state);
+        if let Some((over_res, _, over_state)) = overlay {
+            crate::resource::host_transition(over_res, over_state);
+        }
         #[cfg(feature = "diagnostics")]
         blinks(frame, resource, state, shown);
         #[cfg(not(feature = "diagnostics"))]

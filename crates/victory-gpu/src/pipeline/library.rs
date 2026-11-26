@@ -60,6 +60,22 @@ static DIR: OnceLock<PathBuf> = OnceLock::new();
 /// Keeps the pipeline library and the early list in `dir` from now on.
 pub fn use_pipeline_cache(dir: PathBuf) {
     let _ = DIR.set(dir);
+    static FLUSHER: OnceLock<()> = OnceLock::new();
+    FLUSHER.get_or_init(|| {
+        unsafe extern "system" fn ctrl_handler(_: u32) -> windows_sys::core::BOOL {
+            save(true);
+            0
+        }
+        unsafe {
+            windows_sys::Win32::System::Console::SetConsoleCtrlHandler(Some(ctrl_handler), 1);
+        }
+        let _ = std::thread::Builder::new()
+            .name("victory-pso-flusher".into())
+            .spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                save(false);
+            });
+    });
 }
 
 /// Host pipelines created, loaded from the library, and title pipelines
@@ -591,7 +607,7 @@ pub(crate) fn pipeline(
 /// last save and `SAVE_EVERY` has passed (or `now`).
 pub(crate) fn save(now: bool) {
     static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-    const SAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(20);
+    const SAVE_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
     let (Some(dir), Some(library)) = (DIR.get(), library()) else { return };
     {
         let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());

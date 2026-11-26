@@ -62,6 +62,12 @@ pub fn use_shader_cache(dir: std::path::PathBuf) {
     let _ = dir;
 }
 
+/// Saves the compiled pipeline library now.
+pub fn save_pipeline_cache() {
+    #[cfg(windows)]
+    victory_gpu::pipeline::save_pipeline_cache();
+}
+
 pub(crate) fn module() -> HleModule {
     HleModule {
         name: "d3d12x",
