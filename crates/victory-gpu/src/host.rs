@@ -3153,9 +3153,11 @@ fn blocked_by(written: &[(usize, usize)], runs: &[&HostList], count: bool) -> Op
 
 /// Fills of upload memory (a constant buffer a table names, copied into
 /// the list's own memory when the list is submitted) that read title memory
-/// flights "may write" are no longer waited for; what the flights then
-/// write is checked against them, and the first fill that read bytes a
-/// flight changed afterwards turns the waiting back on for good.
+/// flights "may write" wait for those flights, as the console's card reads
+/// such bytes only after the work before them. With `VICTORY_FILL_WAIT=0`
+/// they are not waited for; what the flights then write is checked against
+/// them, and the first fill that read bytes a flight changed afterwards
+/// turns the waiting back on for good.
 ///
 /// Why: a flight declares every range its shaders can store to, and the
 /// title has an unordered view over the whole of its 174 MB buffer, whose
@@ -3172,7 +3174,12 @@ fn blocked_by(written: &[(usize, usize)], runs: &[&HostList], count: bool) -> Op
 /// that one submission draw with them. `wrote` sees it when the flight
 /// lands (the bytes going into title memory are compared with the ones
 /// there, over every fill that read ahead of them) and from then on fills
-/// wait as before. `VICTORY_FILL_WAIT=1`: they wait from the start.
+/// wait as before. That one submission is enough to be seen: in the
+/// opening café flashback a fixed 2 KiB block (written by shaders, read as
+/// constants) was read ahead once a run as the scene began, and a blurred
+/// oval then stayed over the middle of the picture until the next scene,
+/// in 6 of 7 runs; with fills waiting from the start, in 0 of 3
+/// (victory-fork#1025). So fills wait unless `VICTORY_FILL_WAIT=0`.
 mod fill_ahead {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
@@ -3217,7 +3224,13 @@ mod fill_ahead {
 
     pub(super) fn on() -> bool {
         static ON: OnceLock<bool> = OnceLock::new();
-        *ON.get_or_init(|| std::env::var_os("VICTORY_FILL_WAIT").is_none_or(|v| v != "1")) && !WAIT.load(Relaxed)
+        *ON.get_or_init(|| reads_ahead(std::env::var_os("VICTORY_FILL_WAIT").as_deref())) && !WAIT.load(Relaxed)
+    }
+
+    /// Whether fills may read ahead of flights, from `VICTORY_FILL_WAIT`:
+    /// only when it is `0`.
+    fn reads_ahead(value: Option<&std::ffi::OsStr>) -> bool {
+        value.is_some_and(|v| v == "0")
     }
 
     /// A fill reads `len` bytes at `src` ahead of flights that may write
@@ -3279,7 +3292,7 @@ mod fill_ahead {
                 tracing::warn!(
                     "a fill of upload memory read {} bytes at {from:#x} in frame {read_in} ahead of a flight whose shaders changed \
                      them (first at {:#x}, landed in frame {frame}): the lists of that submission drew with the bytes from before. \
-                     Fills wait for flights again from here on, as with VICTORY_FILL_WAIT=1 ({n} such fills)",
+                     Fills wait for flights again from here on, as without VICTORY_FILL_WAIT=0 ({n} such fills)",
                     to - from,
                     a + first
                 );
@@ -3306,7 +3319,7 @@ mod fill_ahead {
             })
         };
         tracing::info!(
-            "fills of upload memory that read title memory flights may write, not waited for (VICTORY_FILL_WAIT=1 waits): {:.1} per \
+            "fills of upload memory that read title memory flights may write, not waited for (VICTORY_FILL_WAIT=0): {:.1} per \
              frame; {:.1} landings' writes per frame fell in the same 64 KiB as one and were compared with it; fills that read \
              bytes a flight then changed, since the start: {}{}; {kept} fills kept to check",
             ahead as f64 / frames,
@@ -3314,6 +3327,20 @@ mod fill_ahead {
             COUNT[2].load(Relaxed),
             if WAIT.load(Relaxed) { " (fills wait again)" } else { "" }
         );
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::reads_ahead;
+        use std::ffi::OsStr;
+
+        #[test]
+        fn fills_wait_unless_the_switch_is_zero() {
+            assert!(!reads_ahead(None), "unset: fills wait");
+            assert!(!reads_ahead(Some(OsStr::new("1"))), "1: fills wait");
+            assert!(!reads_ahead(Some(OsStr::new(""))), "empty: fills wait");
+            assert!(reads_ahead(Some(OsStr::new("0"))), "0: fills read ahead");
+        }
     }
 }
 

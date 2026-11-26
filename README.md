@@ -490,11 +490,13 @@ What did it, on top of the list below:
   - `VICTORY_MERGE_GAP=64 VICTORY_MERGE_RUNS=4096`: title bytes put in
     under flights' shader writes are joined over small gaps (NOT exact:
     read the comment at `merge_gap` before using it).
-  - On by default: fills of upload memory and read-only buffer copies no
-    longer wait for flights and are checked against what the flights then
-    wrote (`VICTORY_FILL_WAIT=1` waits as before; no mismatch in any run
-    so far); up to 512 idle host lists and texture staging buffers are
-    reused instead of made and freed every frame.
+  - `VICTORY_FILL_WAIT=0`: fills of upload memory and read-only buffer
+    copies don't wait for flights and are checked against what the
+    flights then wrote (on by default until #1025: its one mismatch a run,
+    as the café flashback begins, left a blurred oval over the picture
+    until the next scene, so fills wait by default again); up to 512 idle
+    host lists and texture staging buffers are reused instead of made and
+    freed every frame.
   - `VICTORY_PROFILE=1` (diagnostics builds): a sampling profiler inside
     the layer; it is how the above was found.
 - Frame rate, third session: measuring first (same RTX 4070, first room).
