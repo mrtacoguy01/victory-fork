@@ -4218,6 +4218,7 @@ fn late_line(frames: f64) {
             );
         }
     }
+    crate::port::log(frames);
     if late_exact() {
         let [pages, runs, bytes] = crate::shadow::merged_stats().map(|n| n as f64 / frames);
         let gave_up = crate::shadow::merge_gave_up();
@@ -8094,6 +8095,7 @@ impl HostList {
                         add(C::CopyBytes, len as u64);
                     }
                     batch.title_wrote(dst, len);
+                    crate::port::copied(dst, src, len);
                     #[cfg(feature = "diagnostics")]
                     fill_check::copy_runs(dst, src, len);
                     #[cfg(feature = "diagnostics")]
@@ -8110,6 +8112,7 @@ impl HostList {
                         add(C::CopyBytes, len as u64);
                         fill_check::runs(src, len);
                     }
+                    crate::port::filled(src, len);
                     #[cfg(feature = "diagnostics")]
                     let _reads_as = crate::backreads::reading_as(crate::backreads::TITLE_COPY, 0);
                     copy_fill(dst as *mut u8, src as *const u8, len);
