@@ -61,12 +61,80 @@ pub(crate) struct Shader {
     /// The first 8 bytes of its BLAKE3, as logged.
     pub(crate) hash: String,
     container: Vec<u8>,
+    /// It is left out: it animates or draws hair strands ([`hair_strands`]),
+    /// or serves rays that do not run ([`idle_without_rays`]).
+    #[cfg(windows)]
+    #[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
+    hair: bool,
+    /// Its result gets the least indirect light ([`crate::ambient`]).
+    #[cfg(windows)]
+    pub(crate) resolves_light: bool,
+    /// It draws the sky as the title reflects it ([`crate::ambient::SKY`]).
+    #[cfg(windows)]
+    pub(crate) draws_sky: bool,
+    /// It writes the title's reflections for the last time in a frame
+    /// ([`crate::ambient::REFLECTED`]).
+    #[cfg(windows)]
+    pub(crate) ends_reflections: bool,
     #[cfg(windows)]
     translated: OnceLock<Option<Translated>>,
     /// Whether its code walks the ray-tracing structures, once looked at
     /// ([`Shader::walks`]).
     #[cfg(windows)]
     walks: OnceLock<bool>,
+}
+
+#[cfg(windows)]
+fn rays() -> bool {
+    static RAYS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *RAYS.get_or_init(|| cfg!(test) || std::env::var("VICTORY_RAYS").is_ok_and(|v| v == "1"))
+}
+
+#[cfg(windows)]
+fn idle_without_rays(container: &[u8]) -> bool {
+    const NAME: &[u8] = b"CS_ScreenProbes_ActivateRays";
+    !rays() && container.windows(NAME.len()).any(|w| w == NAME)
+}
+
+#[cfg(windows)]
+fn hair_strands(container: &[u8]) -> bool {
+    static RUN: OnceLock<bool> = OnceLock::new();
+    const NAMES: [&[u8]; 18] = [
+        b"InterpolateStrand",
+        b"HairStrand",
+        b"CS_VisHair",
+        b"PS_Smh",
+        b"CS_InitSimBuffer",
+        b"CS_PreSkinSim",
+        b"CS_SolvePer",
+        b"CS_WavePerSpline",
+        b"CS_EstimateStartPosition",
+        b"CS_CachePrev",
+        b"CS_RestoreSimVelocity",
+        b"CS_UpdatePosePosition",
+        b"CS_GenerateAccessories",
+        b"CSGenerateHair",
+        b"CS_CalculateFireVolumes",
+        b"CS_ProjDecalCut",
+        b"CS_CullMaskPass",
+        b"CS_LodBlend",
+    ];
+    if *RUN.get_or_init(|| std::env::var_os("VICTORY_HAIR").is_some()) {
+        return false;
+    }
+    const END: &[u8] = b"_Wrapped";
+    container
+        .windows(END.len())
+        .enumerate()
+        .filter(|(_, w)| *w == END)
+        .any(|(at, _)| {
+            let before = &container[at.saturating_sub(100)..at];
+            let name = before
+                .rsplit(|b| !b.is_ascii_alphanumeric() && *b != b'_')
+                .next()
+                .unwrap_or_default();
+            NAMES.iter().any(|n| name.windows(n.len()).any(|w| w == *n))
+        })
 }
 
 impl std::fmt::Debug for Shader {
@@ -115,6 +183,20 @@ fn shader(stage: &'static str, bytes: &[u8]) -> Arc<Shader> {
                 stage,
                 hash: full.to_hex()[..16].to_owned(),
                 container: bytes.to_vec(),
+                #[cfg(windows)]
+                hair: hair_strands(bytes) || idle_without_rays(bytes),
+                #[cfg(windows)]
+                resolves_light: bytes
+                    .windows(crate::ambient::PROGRAM.len())
+                    .any(|w| w == crate::ambient::PROGRAM),
+                #[cfg(windows)]
+                draws_sky: bytes
+                    .windows(crate::ambient::SKY.len())
+                    .any(|w| w == crate::ambient::SKY),
+                #[cfg(windows)]
+                ends_reflections: bytes
+                    .windows(crate::ambient::REFLECTED.len())
+                    .any(|w| w == crate::ambient::REFLECTED),
                 #[cfg(windows)]
                 translated: OnceLock::new(),
                 #[cfg(windows)]
@@ -538,12 +620,9 @@ fn skipped_shader(p: &Pipeline) -> Option<&str> {
         let value = std::env::var("VICTORY_SKIP_PIPELINES").unwrap_or_default();
         parse_skip_hashes(&value)
     });
-    if hashes.is_empty() {
-        return None;
-    }
     p.shaders
         .iter()
-        .find(|shader| hashes.contains(&shader.hash))
+        .find(|shader| shader.hair || (!hashes.is_empty() && hashes.contains(&shader.hash)))
         .map(|shader| shader.hash.as_str())
 }
 

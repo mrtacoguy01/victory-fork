@@ -60,6 +60,49 @@ pub(crate) fn track(start: usize, len: usize, views: bool) -> Option<Tracked> {
     })
 }
 
+struct Ahead {
+    ranges: Vec<(usize, usize)>,
+    most: Vec<usize>,
+}
+
+impl Ahead {
+    const fn new() -> Ahead {
+        Ahead {
+            ranges: Vec::new(),
+            most: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, range: (usize, usize)) {
+        let idx = self.ranges.partition_point(|r| r.0 <= range.0);
+        self.ranges.insert(idx, range);
+        self.rebuild_most();
+    }
+
+    fn rebuild_most(&mut self) {
+        self.most.clear();
+        let mut most = 0;
+        for r in &self.ranges {
+            most = most.max(r.1);
+            self.most.push(most);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.ranges.clear();
+        self.most.clear();
+    }
+
+    fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+
+    fn holds(&self, first: usize, last: usize) -> bool {
+        let n = self.ranges.partition_point(|r| r.0 <= first);
+        n > 0 && self.most[n - 1] >= last
+    }
+}
+
 struct Journal {
     /// Numbers the askings; 0 is "never".
     asked: u64,
@@ -70,7 +113,7 @@ struct Journal {
     /// Page ranges asked ahead for a submission's refreshes ([`ask_ahead`])
     /// and the asking that did: `writes` answers for a range inside one
     /// from the journal, without another kernel call.
-    ahead: Vec<(usize, usize)>,
+    ahead: Ahead,
     ahead_asked: u64,
     /// The ahead asking stands for a whole submission ([`ask_once`]): no
     /// other ahead asking is made, and `ahead` stays, until
@@ -82,7 +125,7 @@ static JOURNAL: Mutex<Journal> = Mutex::new(Journal {
     asked: 0,
     written: BTreeMap::new(),
     found: Vec::new(),
-    ahead: Vec::new(),
+    ahead: Ahead::new(),
     ahead_asked: 0,
     kept: false,
 });
@@ -252,7 +295,7 @@ pub(crate) fn ask_once(ranges: &[(usize, usize)]) {
             continue;
         }
         let (first, last) = (start / PAGE, end.div_ceil(PAGE));
-        if !j.ahead.iter().any(|&(a, b)| a <= first && last <= b) && ask_kernel(j, first, last) {
+        if !j.ahead.holds(first, last) && ask_kernel(j, first, last) {
             j.ahead.push((first, last));
         }
     }
@@ -392,8 +435,7 @@ pub(crate) fn asked(start: usize, end: usize) -> Option<(u64, Vec<(usize, u64)>)
     let (first, last) = (start / PAGE, end.div_ceil(PAGE));
     let j = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
     j.ahead
-        .iter()
-        .any(|&(a, b)| a <= first && last <= b)
+        .holds(first, last)
         .then(|| (j.ahead_asked, j.written.range(first..last).map(|(&p, &w)| (p, w)).collect()))
 }
 
@@ -432,7 +474,7 @@ fn writes_as(start: usize, end: usize, guarded: bool, light: u8) -> Option<(u64,
     let mut j = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
     let j = &mut *j;
     // Asked ahead with the submission's other ranges: the journal has it.
-    if j.ahead.iter().any(|&(a, b)| a <= first && last <= b) {
+    if j.ahead.holds(first, last) {
         return Some((
             j.ahead_asked,
             j.written
@@ -1133,7 +1175,7 @@ fn nothing_noted(start: usize, end: usize, base: usize, copied: &[u64]) -> bool 
     }
     let j = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
     // The bits first, then the journal, both under its lock ([`published`]).
-    let by_bits = !j.ahead.iter().any(|&(a, b)| a <= first && last <= b);
+    let by_bits = !j.ahead.holds(first, last);
     if by_bits && !published(&j, first * PAGE, last * PAGE) {
         return false;
     }

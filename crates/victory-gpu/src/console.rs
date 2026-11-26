@@ -22,7 +22,7 @@ impl Console {
     pub const fn title_memory(self) -> (usize, usize) {
         match self {
             Console::SeriesX => (10 * GIB, 7 * GIB / 2),
-            Console::SeriesS => (0, 7_776 << 20),
+            Console::SeriesS => (6 * GIB, 2 * GIB),
         }
     }
 

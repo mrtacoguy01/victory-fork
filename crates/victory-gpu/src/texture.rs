@@ -1547,6 +1547,8 @@ fn staging(resource: This, texture: &ID3D12Resource) -> Option<Arc<Staging>> {
         );
     }
     let (buffer, data, pooled) = staging_buffer(host, total)?;
+    // Zero out staging buffer to prevent stale memory and color artifact smear.
+    unsafe { std::ptr::write_bytes(data, 0, total as usize) };
     crate::host::name_frame(&buffer, || {
         format!(
             "staging of {resource:?} {}x{}x{} f{}",
